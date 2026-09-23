@@ -56,26 +56,14 @@
       <h1 class="text-2xl sm:text-3xl font-semibold tracking-tight">Convergence</h1>
       <p class="text-sm mt-1" style="color:var(--text-dim);">Lecture croisée des marchés 1X2, Total 2.5, BTTS et Score Exact (API Sportmonks v3) pour repérer les scénarios cohérents.</p>
     </div>
-    <div id="apiStatus" class="text-xs mono px-2.5 py-1 rounded-full border shrink-0 mt-1" style="border-color:var(--border); color:var(--text-dim);">clé non renseignée</div>
+    <div class="text-xs mono px-2.5 py-1 rounded-full border shrink-0 mt-1 badge-pos">clé protégée côté serveur</div>
   </header>
 
   <!-- Config -->
   <section class="card p-5 sm:p-6 mb-6">
-    <div class="grid sm:grid-cols-2 gap-4">
-      <div>
-        <label class="block text-sm mb-1.5" style="color:var(--text-dim);">Clé API — Sportmonks (v3)</label>
-        <input id="apiKey" type="password" placeholder="Colle ton api_token ici" class="field w-full px-3 py-2.5 text-sm mono">
-      </div>
-      <div>
-        <label class="block text-sm mb-1.5" style="color:var(--text-dim);">Championnat</label>
-        <select id="sportSelect" class="field w-full px-3 py-2.5 text-sm"></select>
-      </div>
-    </div>
-
-    <div class="mt-4">
-      <label class="block text-sm mb-1.5" style="color:var(--text-dim);">Proxy CORS (optionnel)</label>
-      <input id="proxyUrl" type="text" placeholder="https://ton-proxy.example.com/ (sera préfixé devant chaque URL Sportmonks)" class="field w-full px-3 py-2.5 text-sm mono">
-      <p class="text-xs mt-1.5 leading-relaxed" style="color:var(--text-dim);">L'API Sportmonks ne renvoie pas d'en-têtes CORS permissifs et bloque les appels faits directement depuis un navigateur : une fois ce fichier déployé tel quel, les requêtes échoueront sans passerelle. Renseigne ici l'URL d'un proxy (ex. un Cloudflare Worker qui relaie vers <span class="mono">api.sportmonks.com</span>) — laissé vide, l'app tente l'appel direct.</p>
+    <div>
+      <label class="block text-sm mb-1.5" style="color:var(--text-dim);">Championnat</label>
+      <select id="sportSelect" class="field w-full px-3 py-2.5 text-sm"></select>
     </div>
 
     <div class="flex flex-wrap gap-3 mt-4">
@@ -91,7 +79,7 @@
     </div>
 
     <p id="errorBox" class="hidden text-sm mt-4 px-3 py-2.5 rounded-lg" style="background:var(--neg-soft); color:var(--neg); border:1px solid rgba(217,105,79,.35);"></p>
-    <p class="text-xs mt-3" style="color:var(--text-dim);">La clé et le proxy restent dans ton navigateur (stockage local) — rien n'est envoyé ailleurs qu'à api.sportmonks.com (ou à ton proxy).</p>
+    <p class="text-xs mt-3" style="color:var(--text-dim);">Ton jeton Sportmonks vit uniquement sur Netlify (variable d'environnement) — il ne transite jamais par ce navigateur ni par un proxy tiers.</p>
   </section>
 
   <!-- Results -->
@@ -162,6 +150,8 @@ const MARKET_NAMES = {
   correctScore: 'Correct Score'
 };
 
+const FUNCTION_ENDPOINT = '/.netlify/functions/sportmonks-proxy';
+
 const $ = (id) => document.getElementById(id);
 let currentEvents = {};      // fixture_id -> fixture object
 let leagueIdCache = {};      // searchTerm -> league id
@@ -176,11 +166,6 @@ let marketIdsCache = null;   // { fulltime, totals, btts, correctScore }
     sel.appendChild(opt);
   });
 
-  const savedKey = localStorage.getItem('sportmonksApiKey');
-  if(savedKey){ $('apiKey').value = savedKey; setApiStatus(true); }
-  const savedProxy = localStorage.getItem('sportmonksProxyUrl');
-  if(savedProxy){ $('proxyUrl').value = savedProxy; }
-
   $('loadBtn').addEventListener('click', loadMatches);
   $('matchSelect').addEventListener('change', ()=>{
     $('analyzeBtn').disabled = !$('matchSelect').value;
@@ -188,24 +173,14 @@ let marketIdsCache = null;   // { fulltime, totals, btts, correctScore }
   $('analyzeBtn').addEventListener('click', analyzeMatch);
 })();
 
-function setApiStatus(hasKey){
-  const el = $('apiStatus');
-  el.textContent = hasKey ? 'clé mémorisée' : 'clé non renseignée';
-  el.style.color = hasKey ? 'var(--pos)' : 'var(--text-dim)';
-  el.style.borderColor = hasKey ? 'rgba(79,174,139,.35)' : 'var(--border)';
-}
 function showError(msg){ const box=$('errorBox'); box.textContent=msg; box.classList.remove('hidden'); }
 function clearError(){ $('errorBox').classList.add('hidden'); $('errorBox').textContent=''; }
 function setLoading(isLoading){ $('loadBtn').disabled=isLoading; $('loadBtnLabel').textContent = isLoading ? 'Chargement…' : 'Charger les matchs'; }
 function fmt(n){ return n===null || n===undefined || isNaN(n) ? '—' : n.toFixed(2); }
 
-// ---------- low-level fetch (proxy-aware) ----------
-function targetUrl(url){
-  const proxy = $('proxyUrl').value.trim();
-  return proxy ? proxy.replace(/\/+$/,'') + '/' + url : url;
-}
-async function apiGet(url){
-  const res = await fetch(targetUrl(url));
+// ---------- low-level fetch, via la fonction serverless (le jeton est ajouté côté serveur) ----------
+async function apiGet(path){
+  const res = await fetch(`${FUNCTION_ENDPOINT}?path=${encodeURIComponent(path)}`);
   if(!res.ok){
     const body = await res.text().catch(()=> '');
     throw new Error(`Erreur API (${res.status}) — ${body.slice(0,180)}`);
@@ -214,9 +189,9 @@ async function apiGet(url){
 }
 
 // ---------- resolve league id dynamically ----------
-async function resolveLeagueId(league, key){
+async function resolveLeagueId(league){
   if(leagueIdCache[league.searchTerm]) return leagueIdCache[league.searchTerm];
-  const data = await apiGet(`https://api.sportmonks.com/v3/football/leagues/search/${encodeURIComponent(league.searchTerm)}?api_token=${encodeURIComponent(key)}&include=country`);
+  const data = await apiGet(`football/leagues/search/${encodeURIComponent(league.searchTerm)}?include=country`);
   const list = data.data || [];
   if(!list.length) throw new Error(`Championnat "${league.label}" introuvable (vérifie ton abonnement Sportmonks).`);
   let match = null;
@@ -229,19 +204,19 @@ async function resolveLeagueId(league, key){
 }
 
 // ---------- resolve market ids dynamically ----------
-async function resolveMarketId(name, key){
+async function resolveMarketId(name){
   try{
-    const data = await apiGet(`https://api.sportmonks.com/v3/odds/markets/search/${encodeURIComponent(name)}?api_token=${encodeURIComponent(key)}`);
+    const data = await apiGet(`odds/markets/search/${encodeURIComponent(name)}`);
     const list = data.data || [];
     if(!list.length) return null;
     const exact = list.find(m => (m.name||'').toLowerCase() === name.toLowerCase());
     return (exact || list[0]).id;
   }catch(e){ return null; }
 }
-async function ensureMarketIds(key){
+async function ensureMarketIds(){
   if(marketIdsCache) return marketIdsCache;
   const ids = {};
-  for(const k in MARKET_NAMES){ ids[k] = await resolveMarketId(MARKET_NAMES[k], key); }
+  for(const k in MARKET_NAMES){ ids[k] = await resolveMarketId(MARKET_NAMES[k]); }
   marketIdsCache = ids;
   return ids;
 }
@@ -269,22 +244,17 @@ function parseTeams(fixture){
 
 async function loadMatches(){
   clearError();
-  const key = $('apiKey').value.trim();
   const league = LEAGUES[parseInt($('sportSelect').value, 10)];
-  if(!key){ showError("Entre ta clé API Sportmonks avant de charger les matchs."); return; }
-  localStorage.setItem('sportmonksApiKey', key);
-  localStorage.setItem('sportmonksProxyUrl', $('proxyUrl').value.trim());
-  setApiStatus(true);
 
   $('resultsSection').classList.add('hidden');
   setLoading(true);
   try{
-    const leagueId = await resolveLeagueId(league, key);
+    const leagueId = await resolveLeagueId(league);
     const from = new Date();
     const to = new Date(); to.setDate(to.getDate() + 21);
     const d = (x) => x.toISOString().slice(0,10);
 
-    const data = await apiGet(`https://api.sportmonks.com/v3/football/fixtures/between/${d(from)}/${d(to)}?api_token=${encodeURIComponent(key)}&filters=fixtureLeagues:${leagueId}&include=participants&per_page=50`);
+    const data = await apiGet(`football/fixtures/between/${d(from)}/${d(to)}?filters=fixtureLeagues:${leagueId}&include=participants&per_page=50`);
     const fixtures = (data.data || []).filter(f => f.starting_at);
     currentEvents = {};
     fixtures.forEach(f => currentEvents[f.id] = f);
@@ -363,10 +333,10 @@ function normOverUnder(o){
   return o.name || o.label;
 }
 
-async function fetchMarketOdds(fixtureId, marketId, key){
+async function fetchMarketOdds(fixtureId, marketId){
   if(!marketId) return null;
   try{
-    const data = await apiGet(`https://api.sportmonks.com/v3/football/odds/pre-match/fixtures/${fixtureId}/markets/${marketId}?api_token=${encodeURIComponent(key)}`);
+    const data = await apiGet(`football/odds/pre-match/fixtures/${fixtureId}/markets/${marketId}`);
     return data.data || [];
   }catch(e){ return null; }
 }
@@ -377,20 +347,19 @@ async function analyzeMatch(){
   const fixtureId = $('matchSelect').value;
   if(!fixtureId) return;
   const fixture = currentEvents[fixtureId];
-  const key = $('apiKey').value.trim();
 
   $('analyzeBtn').disabled = true;
   const originalLabel = $('analyzeBtn').textContent;
   $('analyzeBtn').textContent = 'Analyse…';
 
   try{
-    const marketIds = await ensureMarketIds(key);
+    const marketIds = await ensureMarketIds();
 
     const [odds1x2, oddsTotals, oddsBtts, oddsCS] = await Promise.all([
-      fetchMarketOdds(fixtureId, marketIds.fulltime, key),
-      fetchMarketOdds(fixtureId, marketIds.totals, key),
-      fetchMarketOdds(fixtureId, marketIds.btts, key),
-      fetchMarketOdds(fixtureId, marketIds.correctScore, key),
+      fetchMarketOdds(fixtureId, marketIds.fulltime),
+      fetchMarketOdds(fixtureId, marketIds.totals),
+      fetchMarketOdds(fixtureId, marketIds.btts),
+      fetchMarketOdds(fixtureId, marketIds.correctScore),
     ]);
 
     // 1X2
@@ -476,14 +445,14 @@ function renderMarkets({fixture, home, draw, away, over, under, bttsYes, bttsNo,
     rows.push(oddsRow('Oui', bttsYes));
     rows.push(oddsRow('Non', bttsNo));
   } else {
-    rows.push(unavailable("Non disponible pour ce match (marché absent de l'abonnement, ou proxy CORS manquant)."));
+    rows.push(unavailable("Non disponible pour ce match (marché absent de l'abonnement)."));
   }
 
   rows.push(`<div class="pt-4 pb-2 mb-2" style="color:var(--text-dim);">Score exact — 3 cotes les plus basses</div>`);
   if(csAvailable){
     topScores.forEach(r => rows.push(oddsRow(r.label, r)));
   } else {
-    rows.push(unavailable("Non disponible pour ce match (marché absent de l'abonnement, ou proxy CORS manquant)."));
+    rows.push(unavailable("Non disponible pour ce match (marché absent de l'abonnement)."));
   }
 
   $('marketsBody').innerHTML = rows.join('');
