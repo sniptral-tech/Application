@@ -1,6 +1,6 @@
-// Relaie les appels vers l'API Sportmonks côté serveur.
-// Le jeton API vit uniquement ici (variable d'environnement Netlify SPORTMONKS_API_TOKEN),
-// il ne transite jamais par le navigateur ni par un proxy tiers.
+// Relaie les appels vers The Odds API côté serveur.
+// La clé vit uniquement ici (variable d'environnement Netlify ODDS_API_KEY),
+// elle ne transite jamais par le navigateur.
 exports.handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -12,12 +12,12 @@ exports.handler = async (event) => {
     return { statusCode: 204, headers, body: '' };
   }
 
-  const token = process.env.SPORTMONKS_API_TOKEN;
+  const token = process.env.ODDS_API_KEY;
   if (!token) {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "SPORTMONKS_API_TOKEN n'est pas configuré sur Netlify (Site settings > Environment variables)." }),
+      body: JSON.stringify({ error: "ODDS_API_KEY n'est pas configuré sur Netlify (Site settings > Environment variables)." }),
     };
   }
 
@@ -27,7 +27,7 @@ exports.handler = async (event) => {
   }
 
   const separator = path.includes('?') ? '&' : '?';
-  const url = `https://api.sportmonks.com/v3/${path}${separator}api_token=${encodeURIComponent(token)}`;
+  const url = `https://api.the-odds-api.com/v4/${path}${separator}apiKey=${encodeURIComponent(token)}`;
 
   try {
     const res = await fetch(url);
@@ -41,7 +41,7 @@ exports.handler = async (event) => {
     return {
       statusCode: 502,
       headers,
-      body: JSON.stringify({ error: 'Échec de la requête vers Sportmonks : ' + err.message }),
+      body: JSON.stringify({ error: 'Échec de la requête vers The Odds API : ' + err.message }),
     };
   }
 };
