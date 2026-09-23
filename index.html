@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Convergence — Lecture croisée de cotes (Sportmonks)</title>
+<title>Convergence — Lecture croisée de cotes</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -54,7 +54,7 @@
   <header class="flex items-start justify-between mb-8">
     <div>
       <h1 class="text-2xl sm:text-3xl font-semibold tracking-tight">Convergence</h1>
-      <p class="text-sm mt-1" style="color:var(--text-dim);">Lecture croisée des marchés 1X2, Total 2.5, BTTS et Score Exact (API Sportmonks v3) pour repérer les scénarios cohérents.</p>
+      <p class="text-sm mt-1" style="color:var(--text-dim);">Lecture croisée des marchés 1X2, Total 2.5 et BTTS (The Odds API) pour repérer les scénarios cohérents.</p>
     </div>
     <div class="text-xs mono px-2.5 py-1 rounded-full border shrink-0 mt-1 badge-pos">clé protégée côté serveur</div>
   </header>
@@ -79,7 +79,7 @@
     </div>
 
     <p id="errorBox" class="hidden text-sm mt-4 px-3 py-2.5 rounded-lg" style="background:var(--neg-soft); color:var(--neg); border:1px solid rgba(217,105,79,.35);"></p>
-    <p class="text-xs mt-3" style="color:var(--text-dim);">Ton jeton Sportmonks vit uniquement sur Netlify (variable d'environnement) — il ne transite jamais par ce navigateur ni par un proxy tiers.</p>
+    <p class="text-xs mt-3" style="color:var(--text-dim);">Ta clé The Odds API vit uniquement sur Netlify (variable d'environnement) — elle ne transite jamais par ce navigateur.</p>
   </section>
 
   <!-- Results -->
@@ -127,42 +127,31 @@
 </div>
 
 <script>
-// Chaque championnat est résolu dynamiquement via /leagues/search — pas d'ID codé en dur,
-// pour rester correct quel que soit le catalogue de l'abonnement Sportmonks utilisé.
-const LEAGUES = [
-  {label:'Angleterre — Premier League', searchTerm:'Premier League', country:'England'},
-  {label:'Angleterre — Championship', searchTerm:'Championship', country:'England'},
-  {label:'France — Ligue 1', searchTerm:'Ligue 1', country:'France'},
-  {label:'France — Ligue 2', searchTerm:'Ligue 2', country:'France'},
-  {label:'Espagne — La Liga', searchTerm:'La Liga', country:'Spain'},
-  {label:'Italie — Serie A', searchTerm:'Serie A', country:'Italy'},
-  {label:'Allemagne — Bundesliga', searchTerm:'Bundesliga', country:'Germany'},
-  {label:'Allemagne — 2. Bundesliga', searchTerm:'2. Bundesliga', country:'Germany'},
-  {label:'Ligue des Champions', searchTerm:'UEFA Champions League', country:null},
-  {label:'Ligue Europa', searchTerm:'UEFA Europa League', country:null},
-  {label:'Ligue Conférence', searchTerm:'UEFA Europa Conference League', country:null},
+const SPORTS = [
+  {key:'soccer_epl', label:'Angleterre — Premier League'},
+  {key:'soccer_efl_champ', label:'Angleterre — Championship'},
+  {key:'soccer_france_ligue_one', label:'France — Ligue 1'},
+  {key:'soccer_france_ligue_two', label:'France — Ligue 2'},
+  {key:'soccer_spain_la_liga', label:'Espagne — La Liga'},
+  {key:'soccer_italy_serie_a', label:'Italie — Serie A'},
+  {key:'soccer_germany_bundesliga', label:'Allemagne — Bundesliga'},
+  {key:'soccer_germany_bundesliga2', label:'Allemagne — 2. Bundesliga'},
+  {key:'soccer_uefa_champs_league', label:'Ligue des Champions'},
+  {key:'soccer_uefa_europa_league', label:'Ligue Europa'},
+  {key:'soccer_uefa_europa_conference_league', label:'Ligue Conférence'},
 ];
 
-const MARKET_NAMES = {
-  fulltime: 'Fulltime Result',
-  totals: 'Over/Under',
-  btts: 'Both Teams To Score',
-  correctScore: 'Correct Score'
-};
-
-const FUNCTION_ENDPOINT = '/.netlify/functions/sportmonks-proxy';
+const FUNCTION_ENDPOINT = '/.netlify/functions/odds-proxy';
 
 const $ = (id) => document.getElementById(id);
-let currentEvents = {};      // fixture_id -> fixture object
-let leagueIdCache = {};      // searchTerm -> league id
-let marketIdsCache = null;   // { fulltime, totals, btts, correctScore }
+let currentEvents = [];
 
 // ---------- init ----------
 (function init(){
   const sel = $('sportSelect');
-  LEAGUES.forEach((l, i)=>{
+  SPORTS.forEach(s=>{
     const opt = document.createElement('option');
-    opt.value = i; opt.textContent = l.label;
+    opt.value = s.key; opt.textContent = s.label;
     sel.appendChild(opt);
   });
 
@@ -178,7 +167,7 @@ function clearError(){ $('errorBox').classList.add('hidden'); $('errorBox').text
 function setLoading(isLoading){ $('loadBtn').disabled=isLoading; $('loadBtnLabel').textContent = isLoading ? 'Chargement…' : 'Charger les matchs'; }
 function fmt(n){ return n===null || n===undefined || isNaN(n) ? '—' : n.toFixed(2); }
 
-// ---------- low-level fetch, via la fonction serverless (le jeton est ajouté côté serveur) ----------
+// ---------- fetch, via la fonction serverless (la clé est ajoutée côté serveur) ----------
 async function apiGet(path){
   const res = await fetch(`${FUNCTION_ENDPOINT}?path=${encodeURIComponent(path)}`);
   if(!res.ok){
@@ -188,225 +177,118 @@ async function apiGet(path){
   return res.json();
 }
 
-// ---------- resolve league id dynamically ----------
-async function resolveLeagueId(league){
-  if(leagueIdCache[league.searchTerm]) return leagueIdCache[league.searchTerm];
-  const data = await apiGet(`football/leagues/search/${encodeURIComponent(league.searchTerm)}?include=country`);
-  const list = data.data || [];
-  if(!list.length) throw new Error(`Championnat "${league.label}" introuvable (vérifie ton abonnement Sportmonks).`);
-  let match = null;
-  if(league.country){
-    match = list.find(l => l.country && l.country.name && l.country.name.toLowerCase() === league.country.toLowerCase());
-  }
-  if(!match) match = list[0];
-  leagueIdCache[league.searchTerm] = match.id;
-  return match.id;
-}
-
-// ---------- resolve market ids dynamically ----------
-async function resolveMarketId(name){
-  try{
-    const data = await apiGet(`odds/markets/search/${encodeURIComponent(name)}`);
-    const list = data.data || [];
-    if(!list.length) return null;
-    const exact = list.find(m => (m.name||'').toLowerCase() === name.toLowerCase());
-    return (exact || list[0]).id;
-  }catch(e){ return null; }
-}
-async function ensureMarketIds(){
-  if(marketIdsCache) return marketIdsCache;
-  const ids = {};
-  for(const k in MARKET_NAMES){ ids[k] = await resolveMarketId(MARKET_NAMES[k]); }
-  marketIdsCache = ids;
-  return ids;
-}
-
-// ---------- fixtures ----------
-function parseStartingAt(s){
-  if(!s) return null;
-  const iso = s.includes('T') ? s : s.replace(' ', 'T') + 'Z';
-  return new Date(iso);
-}
-function parseTeams(fixture){
-  const parts = fixture.participants;
-  if(Array.isArray(parts) && parts.length>=2){
-    const home = parts.find(p=>p.meta && p.meta.location==='home');
-    const away = parts.find(p=>p.meta && p.meta.location==='away');
-    if(home && away) return {home:home.name, away:away.name};
-    return {home:parts[0].name, away:parts[1].name};
-  }
-  if(fixture.name && fixture.name.includes(' vs ')){
-    const [h,a] = fixture.name.split(' vs ');
-    return {home:h.trim(), away:a.trim()};
-  }
-  return {home:fixture.name||'Équipe A', away:''};
-}
-
+// ---------- fetch matches (h2h + totals, bulk endpoint) ----------
 async function loadMatches(){
   clearError();
-  const league = LEAGUES[parseInt($('sportSelect').value, 10)];
+  const sport = $('sportSelect').value;
 
   $('resultsSection').classList.add('hidden');
   setLoading(true);
   try{
-    const leagueId = await resolveLeagueId(league);
-    const from = new Date();
-    const to = new Date(); to.setDate(to.getDate() + 21);
-    const d = (x) => x.toISOString().slice(0,10);
-
-    const data = await apiGet(`football/fixtures/between/${d(from)}/${d(to)}?filters=fixtureLeagues:${leagueId}&include=participants&per_page=50`);
-    const fixtures = (data.data || []).filter(f => f.starting_at);
-    currentEvents = {};
-    fixtures.forEach(f => currentEvents[f.id] = f);
-    populateMatchSelect(fixtures);
+    const data = await apiGet(`sports/${sport}/odds?regions=eu&markets=h2h,totals&oddsFormat=decimal`);
+    currentEvents = data;
+    populateMatchSelect(data);
   }catch(err){
-    showError(err.message || "Impossible de contacter l'API Sportmonks.");
+    showError(err.message || "Impossible de contacter l'API.");
   }finally{
     setLoading(false);
   }
 }
 
-function populateMatchSelect(fixtures){
+function populateMatchSelect(events){
   const sel = $('matchSelect');
   sel.innerHTML = '';
   $('analyzeBtn').disabled = true;
 
-  if(!fixtures.length){
+  if(!events.length){
     sel.innerHTML = '<option value="">Aucun match disponible pour ce championnat</option>';
     sel.disabled = true;
     return;
   }
   sel.disabled = false;
   const placeholder = document.createElement('option');
-  placeholder.value = ''; placeholder.textContent = `— Choisir un match (${fixtures.length}) —`;
+  placeholder.value = ''; placeholder.textContent = `— Choisir un match (${events.length}) —`;
   sel.appendChild(placeholder);
 
-  fixtures
+  events
     .slice()
-    .sort((a,b) => parseStartingAt(a.starting_at) - parseStartingAt(b.starting_at))
-    .forEach((f) => {
-      const teams = parseTeams(f);
+    .sort((a,b)=> new Date(a.commence_time) - new Date(b.commence_time))
+    .forEach((ev)=>{
       const opt = document.createElement('option');
-      opt.value = f.id;
-      const dt = parseStartingAt(f.starting_at);
-      const dateStr = dt ? dt.toLocaleString('fr-FR', {weekday:'short', day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) : '';
-      opt.textContent = `${teams.home} – ${teams.away} · ${dateStr}`;
+      opt.value = ev.id;
+      const d = new Date(ev.commence_time);
+      const dateStr = d.toLocaleString('fr-FR', {weekday:'short', day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'});
+      opt.textContent = `${ev.home_team} – ${ev.away_team} · ${dateStr}`;
       sel.appendChild(opt);
     });
 }
 
 // ---------- odds helpers ----------
-function groupBy(list, normalizer){
-  const out = {};
-  (list || []).forEach(o => {
-    const key = normalizer ? normalizer(o) : (o.label || o.name);
-    if(!key) return;
-    const price = parseFloat(o.value);
-    if(isNaN(price)) return;
-    if(!out[key]) out[key] = [];
-    out[key].push({price});
+function extractMarket(event, marketKey){
+  const outcomes = {};
+  (event.bookmakers || []).forEach(bm=>{
+    const market = (bm.markets || []).find(m => m.key === marketKey);
+    if(!market) return;
+    market.outcomes.forEach(o=>{
+      const label = o.point !== undefined ? `${o.name}|${o.point}` : o.name;
+      if(!outcomes[label]) outcomes[label] = [];
+      outcomes[label].push({price:o.price, bookmaker:bm.title});
+    });
   });
-  return out;
+  return outcomes;
 }
 function summarize(list){
   if(!list || !list.length) return null;
   const prices = list.map(x=>x.price);
   return { avg: prices.reduce((s,x)=>s+x,0)/prices.length, best: Math.max(...prices), count: list.length };
 }
-function norm1x2(o){
-  const n = (o.name || o.label || '').toString().toLowerCase();
-  if(n==='home' || n==='1') return 'Home';
-  if(n==='draw' || n==='x') return 'Draw';
-  if(n==='away' || n==='2') return 'Away';
-  return o.name || o.label;
-}
-function normYesNo(o){
-  const n = (o.name || o.label || '').toString().toLowerCase();
-  if(n==='yes') return 'Yes';
-  if(n==='no') return 'No';
-  return o.name || o.label;
-}
-function normOverUnder(o){
-  const n = (o.name || o.label || '').toString().toLowerCase();
-  if(n.includes('over')) return 'Over';
-  if(n.includes('under')) return 'Under';
-  return o.name || o.label;
-}
 
-async function fetchMarketOdds(fixtureId, marketId){
-  if(!marketId) return null;
+// ---------- BTTS (additional market — per-event endpoint) ----------
+async function fetchBTTS(sport, eventId){
   try{
-    const data = await apiGet(`football/odds/pre-match/fixtures/${fixtureId}/markets/${marketId}`);
-    return data.data || [];
+    const data = await apiGet(`sports/${sport}/events/${eventId}/odds?regions=eu&markets=btts&oddsFormat=decimal`);
+    return extractMarket(data, 'btts');
   }catch(e){ return null; }
 }
 
 // ---------- analysis ----------
 async function analyzeMatch(){
   clearError();
-  const fixtureId = $('matchSelect').value;
-  if(!fixtureId) return;
-  const fixture = currentEvents[fixtureId];
+  const eventId = $('matchSelect').value;
+  if(!eventId) return;
+  const event = currentEvents.find(e => e.id === eventId);
+  const sport = $('sportSelect').value;
 
   $('analyzeBtn').disabled = true;
   const originalLabel = $('analyzeBtn').textContent;
   $('analyzeBtn').textContent = 'Analyse…';
 
-  try{
-    const marketIds = await ensureMarketIds();
+  const h2h = extractMarket(event, 'h2h');
+  const home = summarize(h2h[event.home_team]);
+  const away = summarize(h2h[event.away_team]);
+  const draw = summarize(h2h['Draw']);
 
-    const [odds1x2, oddsTotals, oddsBtts, oddsCS] = await Promise.all([
-      fetchMarketOdds(fixtureId, marketIds.fulltime),
-      fetchMarketOdds(fixtureId, marketIds.totals),
-      fetchMarketOdds(fixtureId, marketIds.btts),
-      fetchMarketOdds(fixtureId, marketIds.correctScore),
-    ]);
+  const totals = extractMarket(event, 'totals');
+  const over = summarize(totals['Over|2.5']);
+  const under = summarize(totals['Under|2.5']);
 
-    // 1X2
-    let home=null, draw=null, away=null, oneXTwoAvailable=false;
-    if(odds1x2){
-      const g = groupBy(odds1x2, norm1x2);
-      home = summarize(g['Home']); draw = summarize(g['Draw']); away = summarize(g['Away']);
-      oneXTwoAvailable = !!(home && away);
-    }
-
-    // Total 2.5
-    let over=null, under=null, totalsAvailable=false;
-    if(oddsTotals){
-      const filtered = oddsTotals.filter(o => parseFloat(o.total) === 2.5);
-      const g = groupBy(filtered, normOverUnder);
-      over = summarize(g['Over']); under = summarize(g['Under']);
-      totalsAvailable = !!(over && under);
-    }
-
-    // BTTS
-    let bttsYes=null, bttsNo=null, bttsAvailable=false;
-    if(oddsBtts){
-      const g = groupBy(oddsBtts, normYesNo);
-      bttsYes = summarize(g['Yes']); bttsNo = summarize(g['No']);
-      bttsAvailable = !!(bttsYes && bttsNo);
-    }
-
-    // Score Exact — on isole les 3 scores aux cotes les plus basses
-    let topScores = [], csAvailable = false;
-    if(oddsCS){
-      const g = groupBy(oddsCS, o => (o.label || o.name || '').toString());
-      const rows = Object.keys(g).map(label => ({ label, ...summarize(g[label]) })).filter(r => r.avg);
-      rows.sort((a,b) => a.avg - b.avg);
-      topScores = rows.slice(0, 3);
-      csAvailable = topScores.length > 0;
-    }
-
-    const ctx = {fixture, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable, topScores, csAvailable, oneXTwoAvailable, totalsAvailable};
-    renderMarkets(ctx);
-    renderVerdict(computeConvergence(ctx));
-    $('resultsSection').classList.remove('hidden');
-  }catch(err){
-    showError(err.message || "Erreur lors de l'analyse.");
-  }finally{
-    $('analyzeBtn').disabled = false;
-    $('analyzeBtn').textContent = originalLabel;
+  let bttsYes = null, bttsNo = null, bttsAvailable = true;
+  const btts = await fetchBTTS(sport, eventId);
+  if(btts){
+    bttsYes = summarize(btts['Yes']);
+    bttsNo = summarize(btts['No']);
+    if(!bttsYes && !bttsNo) bttsAvailable = false;
+  } else {
+    bttsAvailable = false;
   }
+
+  renderMarkets({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable});
+  const verdict = computeConvergence({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable});
+  renderVerdict(verdict);
+
+  $('resultsSection').classList.remove('hidden');
+  $('analyzeBtn').disabled = false;
+  $('analyzeBtn').textContent = originalLabel;
 }
 
 function oddsRow(label, summary){
@@ -416,55 +298,39 @@ function oddsRow(label, summary){
   </div>`;
 }
 
-function renderMarkets({fixture, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable, topScores, csAvailable, oneXTwoAvailable, totalsAvailable}){
-  const teams = parseTeams(fixture);
-  $('matchLabel').textContent = `${teams.home} – ${teams.away}`;
+function renderMarkets({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable}){
+  $('matchLabel').textContent = `${event.home_team} – ${event.away_team}`;
 
   const rows = [];
-  const unavailable = (msg) => `<div class="text-xs italic py-1" style="color:var(--text-dim);">${msg}</div>`;
-
   rows.push(`<div class="pb-2 mb-2" style="color:var(--text-dim);">1X2 <span class="text-xs">(cote moyenne · meilleure cote)</span></div>`);
-  if(oneXTwoAvailable){
-    rows.push(oddsRow(teams.home, home));
-    rows.push(oddsRow('Nul', draw));
-    rows.push(oddsRow(teams.away, away));
-  } else {
-    rows.push(unavailable("Non disponible pour ce match via l'API."));
-  }
+  rows.push(oddsRow(event.home_team, home));
+  rows.push(oddsRow('Nul', draw));
+  rows.push(oddsRow(event.away_team, away));
 
   rows.push(`<div class="pt-4 pb-2 mb-2" style="color:var(--text-dim);">Total 2.5 buts</div>`);
-  if(totalsAvailable){
-    rows.push(oddsRow('Plus de 2.5', over));
-    rows.push(oddsRow('Moins de 2.5', under));
-  } else {
-    rows.push(unavailable("Non disponible pour ce match via l'API."));
-  }
+  rows.push(oddsRow('Plus de 2.5', over));
+  rows.push(oddsRow('Moins de 2.5', under));
 
   rows.push(`<div class="pt-4 pb-2 mb-2" style="color:var(--text-dim);">BTTS (les deux marquent)</div>`);
   if(bttsAvailable){
     rows.push(oddsRow('Oui', bttsYes));
     rows.push(oddsRow('Non', bttsNo));
   } else {
-    rows.push(unavailable("Non disponible pour ce match (marché absent de l'abonnement)."));
+    rows.push(`<div class="text-xs italic py-1" style="color:var(--text-dim);">Non disponible pour ce match via l'API.</div>`);
   }
 
-  rows.push(`<div class="pt-4 pb-2 mb-2" style="color:var(--text-dim);">Score exact — 3 cotes les plus basses</div>`);
-  if(csAvailable){
-    topScores.forEach(r => rows.push(oddsRow(r.label, r)));
-  } else {
-    rows.push(unavailable("Non disponible pour ce match (marché absent de l'abonnement)."));
-  }
+  rows.push(`<div class="pt-4 pb-2 mb-2" style="color:var(--text-dim);">Score exact</div>`);
+  rows.push(`<div class="text-xs italic py-1" style="color:var(--text-dim);">The Odds API ne propose pas ce marché — indisponible quelle que soit la ligue.</div>`);
 
   $('marketsBody').innerHTML = rows.join('');
 }
 
 // ---------- convergence / divergence ----------
-function computeConvergence({fixture, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable, topScores, csAvailable, oneXTwoAvailable, totalsAvailable}){
-  const teams = parseTeams(fixture);
+function computeConvergence({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable}){
   const signals = [];
   let favSide = null;
 
-  if(oneXTwoAvailable){
+  if(home && away){
     const ranked = [{side:'home', v:home.avg}, {side:'away', v:away.avg}];
     if(draw) ranked.push({side:'draw', v:draw.avg});
     ranked.sort((a,b)=>a.v-b.v);
@@ -472,38 +338,20 @@ function computeConvergence({fixture, home, draw, away, over, under, bttsYes, bt
     signals.push({
       label:'1X2',
       narrative: favSide === 'draw' ? 'ouverte' : 'fermee',
-      detail: favSide === 'home' ? `${teams.home} favori`
-            : favSide === 'away' ? `${teams.away} favori`
+      detail: favSide === 'home' ? `${event.home_team} favori`
+            : favSide === 'away' ? `${event.away_team} favori`
             : 'match indécis, nul en tête'
     });
   }
 
-  if(totalsAvailable){
+  if(over && under){
     const dir = over.avg < under.avg ? 'ouverte' : 'fermee';
     signals.push({label:'Total 2.5', narrative:dir, detail: dir==='ouverte' ? 'plus de 2.5 buts favorisé' : 'moins de 2.5 buts favorisé'});
   }
 
-  if(bttsAvailable){
+  if(bttsAvailable && bttsYes && bttsNo){
     const dir = bttsYes.avg < bttsNo.avg ? 'ouverte' : 'fermee';
     signals.push({label:'BTTS', narrative:dir, detail: dir==='ouverte' ? 'les deux marquent, favorisé' : 'au moins une équipe ne marque pas, favorisé'});
-  }
-
-  let csGoalsAvg = null;
-  if(csAvailable){
-    let totalWeight = 0, weightedGoals = 0;
-    topScores.forEach(r => {
-      const m = r.label.match(/(\d+)\D+(\d+)/);
-      if(m){
-        const goals = parseInt(m[1],10) + parseInt(m[2],10);
-        const w = 1 / r.avg;
-        totalWeight += w; weightedGoals += w * goals;
-      }
-    });
-    if(totalWeight > 0){
-      csGoalsAvg = weightedGoals / totalWeight;
-      const dir = csGoalsAvg >= 2.5 ? 'ouverte' : 'fermee';
-      signals.push({label:'Score exact', narrative:dir, detail:`scores les plus cotés ≈ ${csGoalsAvg.toFixed(1)} but(s) au total`});
-    }
   }
 
   const total = signals.length;
@@ -518,7 +366,7 @@ function computeConvergence({fixture, home, draw, away, over, under, bttsYes, bt
   if(total < 2){
     pronostic = "Trop peu de marchés disponibles sur ce match pour conclure quoi que ce soit — l'analyse n'est pas exploitable ici.";
   } else if(isConvergence && dominant === 'fermee'){
-    const favName = favSide === 'home' ? teams.home : favSide === 'away' ? teams.away : null;
+    const favName = favSide === 'home' ? event.home_team : favSide === 'away' ? event.away_team : null;
     pronostic = favName
       ? `Les marchés pointent vers un scénario fermé autour de ${favName}. Piste à creuser : Double Chance ${favName} associé à Moins de 2.5 buts — à vérifier match par match, jamais garanti.`
       : `Les marchés pointent vers un scénario fermé, sans favori net. Piste à creuser : Moins de 2.5 buts.`;
@@ -526,10 +374,6 @@ function computeConvergence({fixture, home, draw, away, over, under, bttsYes, bt
     pronostic = "Les marchés pointent vers un match ouvert. Piste à creuser : BTTS Oui ou Plus de 1.5 but — à confronter aux cotes réelles avant de jouer.";
   } else {
     pronostic = "Les marchés se contredisent (pas de scénario dominant) — c'est un signal de prudence, pas d'opportunité.";
-  }
-
-  if(csAvailable && topScores[0]){
-    pronostic += ` Score le plus court en cote : ${topScores[0].label} (cote moyenne ${fmt(topScores[0].avg)}).`;
   }
 
   return {signals, score, isConvergence, total, pronostic};
