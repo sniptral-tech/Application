@@ -54,7 +54,7 @@
   <header class="flex items-start justify-between mb-8">
     <div>
       <h1 class="text-2xl sm:text-3xl font-semibold tracking-tight">Convergence</h1>
-      <p class="text-sm mt-1" style="color:var(--text-dim);">Lecture croisée des marchés 1X2, Total 2.5 et BTTS (The Odds API) pour repérer les scénarios cohérents.</p>
+      <p class="text-sm mt-1" style="color:var(--text-dim);">Lecture croisée des marchés 1X2, Total 2.5, BTTS (The Odds API) et Score exact (saisie manuelle) pour repérer les scénarios cohérents.</p>
     </div>
     <div class="text-xs mono px-2.5 py-1 rounded-full border shrink-0 mt-1 badge-pos">clé protégée côté serveur</div>
   </header>
@@ -75,7 +75,28 @@
           <option value="">— Charge d'abord un championnat —</option>
         </select>
       </div>
-      <button id="analyzeBtn" class="btn-ghost px-4 py-2.5 rounded-lg text-sm" disabled>Analyser</button>
+    </div>
+
+    <div class="mt-5 pt-4" style="border-top:1px solid var(--border-soft);">
+      <p class="text-sm font-medium mb-3">Scores Exacts (Saisie Manuelle)</p>
+      <div class="space-y-2">
+        <div class="flex items-center gap-2">
+          <span class="text-xs mono shrink-0" style="color:var(--text-dim); width:56px;">Score 1</span>
+          <input id="manualScore1" type="text" placeholder="ex: 2-0" class="field px-3 py-2 text-sm mono flex-1 min-w-0">
+          <input id="manualCote1" type="number" step="0.01" min="1" placeholder="Cote" class="field px-3 py-2 text-sm mono" style="width:90px;">
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs mono shrink-0" style="color:var(--text-dim); width:56px;">Score 2</span>
+          <input id="manualScore2" type="text" placeholder="ex: 1-1" class="field px-3 py-2 text-sm mono flex-1 min-w-0">
+          <input id="manualCote2" type="number" step="0.01" min="1" placeholder="Cote" class="field px-3 py-2 text-sm mono" style="width:90px;">
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs mono shrink-0" style="color:var(--text-dim); width:56px;">Score 3</span>
+          <input id="manualScore3" type="text" placeholder="ex: 1-0" class="field px-3 py-2 text-sm mono flex-1 min-w-0">
+          <input id="manualCote3" type="number" step="0.01" min="1" placeholder="Cote" class="field px-3 py-2 text-sm mono" style="width:90px;">
+        </div>
+      </div>
+      <button id="analyzeBtn" class="btn-primary px-4 py-2.5 rounded-lg text-sm mt-3" disabled>Lancer l'analyse complète</button>
     </div>
 
     <p id="errorBox" class="hidden text-sm mt-4 px-3 py-2.5 rounded-lg" style="background:var(--neg-soft); color:var(--neg); border:1px solid rgba(217,105,79,.35);"></p>
@@ -118,7 +139,7 @@
       </div>
 
       <p class="text-xs mt-5 leading-relaxed" style="color:var(--text-dim);">
-        Ce score mesure la cohérence entre marchés d'un même bookmaker moyen, pas une probabilité de gain. Il n'élimine ni la variance ni le risque de perte — vérifie toujours les cotes réelles avant de miser.
+        Ce score mesure la cohérence entre 4 facteurs (1X2, Total 2.5 et BTTS via l'API, Score exact saisi à la main), pas une probabilité de gain. Il n'élimine ni la variance ni le risque de perte — vérifie toujours les cotes réelles avant de miser.
       </p>
     </div>
 
@@ -251,6 +272,15 @@ async function fetchBTTS(sport, eventId){
   }catch(e){ return null; }
 }
 
+// ---------- scores exacts saisis à la main ----------
+function getManualScores(){
+  const rows = [1,2,3].map(i => ({
+    score: ($(`manualScore${i}`).value || '').trim(),
+    cote: parseFloat($(`manualCote${i}`).value)
+  }));
+  return rows.filter(r => /^\d+\s*-\s*\d+$/.test(r.score) && !isNaN(r.cote) && r.cote > 1);
+}
+
 // ---------- analysis ----------
 async function analyzeMatch(){
   clearError();
@@ -258,6 +288,7 @@ async function analyzeMatch(){
   if(!eventId) return;
   const event = currentEvents.find(e => e.id === eventId);
   const sport = $('sportSelect').value;
+  const manualScores = getManualScores();
 
   $('analyzeBtn').disabled = true;
   const originalLabel = $('analyzeBtn').textContent;
@@ -282,8 +313,8 @@ async function analyzeMatch(){
     bttsAvailable = false;
   }
 
-  renderMarkets({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable});
-  const verdict = computeConvergence({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable});
+  renderMarkets({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable, manualScores});
+  const verdict = computeConvergence({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable, manualScores});
   renderVerdict(verdict);
 
   $('resultsSection').classList.remove('hidden');
@@ -298,7 +329,7 @@ function oddsRow(label, summary){
   </div>`;
 }
 
-function renderMarkets({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable}){
+function renderMarkets({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable, manualScores}){
   $('matchLabel').textContent = `${event.home_team} – ${event.away_team}`;
 
   const rows = [];
@@ -319,14 +350,20 @@ function renderMarkets({event, home, draw, away, over, under, bttsYes, bttsNo, b
     rows.push(`<div class="text-xs italic py-1" style="color:var(--text-dim);">Non disponible pour ce match via l'API.</div>`);
   }
 
-  rows.push(`<div class="pt-4 pb-2 mb-2" style="color:var(--text-dim);">Score exact</div>`);
-  rows.push(`<div class="text-xs italic py-1" style="color:var(--text-dim);">The Odds API ne propose pas ce marché — indisponible quelle que soit la ligue.</div>`);
+  rows.push(`<div class="pt-4 pb-2 mb-2" style="color:var(--text-dim);">Score exact (saisie manuelle)</div>`);
+  if(manualScores && manualScores.length){
+    manualScores.forEach(s=>{
+      rows.push(`<div class="flex items-center justify-between py-1.5 row-line"><span>${s.score}</span><span class="mono text-sm">${fmt(s.cote)}</span></div>`);
+    });
+  } else {
+    rows.push(`<div class="text-xs italic py-1" style="color:var(--text-dim);">Aucun score saisi.</div>`);
+  }
 
   $('marketsBody').innerHTML = rows.join('');
 }
 
 // ---------- convergence / divergence ----------
-function computeConvergence({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable}){
+function computeConvergence({event, home, draw, away, over, under, bttsYes, bttsNo, bttsAvailable, manualScores}){
   const signals = [];
   let favSide = null;
 
@@ -354,6 +391,16 @@ function computeConvergence({event, home, draw, away, over, under, bttsYes, btts
     signals.push({label:'BTTS', narrative:dir, detail: dir==='ouverte' ? 'les deux marquent, favorisé' : 'au moins une équipe ne marque pas, favorisé'});
   }
 
+  if(manualScores && manualScores.length){
+    const best = manualScores.slice().sort((a,b)=>a.cote-b.cote)[0];
+    const m = best.score.match(/(\d+)\s*-\s*(\d+)/);
+    if(m){
+      const hg = parseInt(m[1],10), ag = parseInt(m[2],10);
+      const dir = (hg+ag) >= 3 ? 'ouverte' : 'fermee';
+      signals.push({label:'Score exact (saisie)', narrative:dir, detail:`${best.score} coté ${fmt(best.cote)}`});
+    }
+  }
+
   const total = signals.length;
   const ouverteCount = signals.filter(s=>s.narrative==='ouverte').length;
   const fermeeCount = total - ouverteCount;
@@ -364,7 +411,7 @@ function computeConvergence({event, home, draw, away, over, under, bttsYes, btts
 
   let pronostic;
   if(total < 2){
-    pronostic = "Trop peu de marchés disponibles sur ce match pour conclure quoi que ce soit — l'analyse n'est pas exploitable ici.";
+    pronostic = "Trop peu de marchés/scores disponibles sur ce match pour conclure quoi que ce soit — l'analyse n'est pas exploitable ici.";
   } else if(isConvergence && dominant === 'fermee'){
     const favName = favSide === 'home' ? event.home_team : favSide === 'away' ? event.away_team : null;
     pronostic = favName
